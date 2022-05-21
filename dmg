@@ -1,0 +1,8 @@
+#!/bin/python3
+import os
+import argparse
+root_dir = os.getenv("DMG_ROOT")
+if not root_dir:
+    print("DMG_ROOT not set, exiting")
+    os._exit(1)
+
