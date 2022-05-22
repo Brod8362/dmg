@@ -50,9 +50,10 @@ def parse_file(path: str, hostname: str, base: str) -> bytes:
                             return None
                     case _:
                         logging.warning(f"{base}:L{lc} unknown dmg directive {directive}")
-            elif not parsing_for or hostname in parsing_for:
+            elif parsing_for == None or hostname in parsing_for:
                 output_buffer.append(line)
-    return "\n".join(output_buffer).encode("utf-8")
+
+    return "".join(output_buffer).encode("utf-8")
             
 
 if __name__ == "__main__":
@@ -91,7 +92,9 @@ if __name__ == "__main__":
                         if not args.dryrun:
                             logging.info(f"deploying {dest}")
                             os.makedirs(os.path.dirname(dest), exist_ok=True)
-                            shutil.copy(fpath, dest)
+                            f = open(dest, 'wb')
+                            f.write(fcontent)
+                            f.close()
             else: #all files
                 pass
         case "import":
