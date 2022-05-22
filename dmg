@@ -7,7 +7,7 @@ import shutil
 from subprocess import call
 import tempfile
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 
 def deploy(data: bytes, output_path: str) -> None:
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -92,7 +92,7 @@ if __name__ == "__main__":
     agp.add_argument("-l", dest="loglevel", help="Set the log level.", type=str, default="info", choices=["info", "warning", "error", "debug"])
     agp.add_argument("--dry", dest="dryrun", help="Dry run: parse normally, but do not write anything to disk.", action=argparse.BooleanOptionalAction)
     #actions
-    agp.add_argument("-a", dest="action", help="Action to take.", choices=["deploy", "import", "parse", "edit"], required=True)
+    agp.add_argument("-a", dest="action", help="Action to take.", choices=["deploy", "import", "parse", "edit", "delete"], required=True)
     agp.add_argument("-f", dest="file", help="Generic file argument. Required for import and parse.")
     agp.add_argument("-s", dest="dir", help="Source directory. May use DMG_ROOT env variable instead.", type=str, default=os.path.expandvars(os.getenv("DMG_ROOT")))
     args = agp.parse_args()
@@ -181,5 +181,16 @@ if __name__ == "__main__":
                     logging.info(f"{args.file} parsed OK and deployed")
                 else:
                     logging.error(f"failed to parse {args.file}")
+        case "delete":
+            if not args.file:
+                logging.error("file argument required for delete")
+                os._exit(1)
+            absp = os.path.abspath(args.file)
+            fp = DMG_DIR + "/" + absp
+            if not os.path.exists(fp):
+                logging.error(f"file {absp} is not managed by dmg")
+                os._exit(1)
+            os.remove(fp)
+            logging.info(f"file {absp} will no longer be managed by dmg")
         case _:
             logging.error(f"unknown action: {args.action}")
