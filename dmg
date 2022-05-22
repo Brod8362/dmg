@@ -6,15 +6,44 @@ import logging
 import shutil
 from subprocess import call
 import tempfile
+import hashlib
 
 # ERROR MESSSAGES
 E_NOT_MANAGED = "{file} not managed by dmg"
 E_FILE_ARG_MISSING = "file argument required for {operation}"
 E_PARSE_FAIL = "{file}: parsing failed"
+E_FILE_NON_EXIST = "failed: {file} does not exist"
 I_DEPLOYING = "deploying {file}"
 I_PARSE_OK = "{file}: parsing OK"
 
-VERSION = "0.1.3"
+VERSION = "0.1.4"
+
+#base would be DMG_ROOT
+#file would be something like ~/.zshrc
+def verify(base: str, file: str, hostname: str) -> str | None:
+    bp = os.path.abspath(base)
+    fl = os.path.abspath(os.path.expanduser(file))
+    total = bp + "/" + fl
+    if not os.path.exists(total):
+        return "not managed"
+    if not os.path.exists(fl):
+        return "not deployed"
+    dep_fd = open(file, "rb")
+    hash_src = hashlib.sha256(dep_fd.read())
+    dep_fd.close()
+    src_parse_data = dmg_parse(total, hostname, display=file)
+    if not src_parse_data:
+        return "cannot parse"
+    hash_parsed = hashlib.sha256(src_parse_data)
+    if hash_src.hexdigest() != hash_parsed.hexdigest():
+        src_modified = os.stat(total).st_mtime
+        dep_modified = os.stat(fl).st_mtime
+        if src_modified > dep_modified:
+            return "deployment out-of-date"
+        else:
+            return "deployment modified"
+    return None
+
 
 def deploy(data: bytes, output_path: str) -> None:
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -96,10 +125,10 @@ if __name__ == "__main__":
 
     agp = argparse.ArgumentParser(description=f"dmg: dotfile manager (v{VERSION})")
     #flags
-    agp.add_argument("-l", dest="loglevel", help="Set the log level.", type=str, default="info", choices=["info", "warning", "error", "debug"])
+    agp.add_argument("-l", dest="loglevel", help="Set the log level.", type=str, default="info", choices=["info", "warning", "error", "debug", "verify"])
     agp.add_argument("--dry", dest="dryrun", help="Dry run: parse normally, but do not write anything to disk.", action=argparse.BooleanOptionalAction)
     #actions
-    agp.add_argument("-a", dest="action", help="Action to take.", choices=["deploy", "import", "parse", "edit", "delete"], required=True)
+    agp.add_argument("-a", dest="action", help="Action to take.", choices=["deploy", "import", "parse", "edit", "delete", "verify"], required=True)
     agp.add_argument("-f", dest="file", help="Generic file argument. Required for import, parse, edit, and delete.")
     agp.add_argument("-s", dest="dir", help="Source directory. May use DMG_ROOT env variable instead.", type=str, default=os.path.expandvars(os.getenv("DMG_ROOT")))
     args = agp.parse_args()
@@ -157,7 +186,7 @@ if __name__ == "__main__":
                         #TODO: check if file exists already
                         logging.info(f"imported {args.file} -> {dest}")
                     else:
-                        logging.error(f"import failed: file {args.file} does not exist")
+                        logging.error(E_FILE_NON_EXIST.format(file=args.file))
                         os._exit(1)
         case "parse":
             if not args.file:
@@ -201,6 +230,16 @@ if __name__ == "__main__":
                     logging.info(f"{args.file} parsed OK and deployed")
                 else:
                     logging.error(f"failed to parse {args.file}")
+        case "verify":
+            for root, dirs, files in os.walk(DMG_DIR):
+                    for fname in files:
+                        fpath = os.path.join(root, fname)
+                        dest = fpath[len(DMG_DIR):]
+                        res = verify(DMG_DIR, dest, HOSTNAME)
+                        if not res:
+                            print(f"{dest} -> \033[1;32mOK\033[0m")
+                        else:
+                            print(f"{dest} -> \033[1;31m{res}\033[0m")
         case "delete":
             if not args.file:
                 logging.error(E_FILE_ARG_MISSING.format(operation=args.action))
