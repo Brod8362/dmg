@@ -1,8 +1,103 @@
 #!/bin/python3
 import os
+import sys
 import argparse
-root_dir = os.getenv("DMG_ROOT")
-if not root_dir:
-    print("DMG_ROOT not set, exiting")
-    os._exit(1)
+import logging
+import shutil
 
+def parse_file(path: str, hostname: str, base: str) -> bytes:
+    dest_hostnames = None
+    output_buffer = []
+    parsing_for = None
+    lc = 0
+    with open(path, "r") as fp:
+        while True:
+            line = fp.readline()
+            lc+=1
+            if not line:
+                break
+            if line.startswith("##$"):
+                # "##$ hosts: host1, host2" -> directive = "hosts", data = "host1, host2"
+                directive = ""
+                data = None
+                v = line[line.find("##$")+3:].strip().split(":", 1)
+                directive = v[0]
+                if len(v) == 2:
+                    data = v[1]
+                match directive.strip():
+                    case "hosts":
+                        if not dest_hostnames:
+                            dest_hostnames = set(map(lambda x: x.strip(), data.split(",")))
+                            logging.debug(f"{base} is for {dest_hostnames}")
+                            if not hostname in dest_hostnames:
+                                logging.info(f"{base} not for me, skipping")
+                                return None
+                        else: #hostnames already found
+                            logging.error(f"{base}:L{lc} unexpected hosts directive - hosts already declared")
+                            return None
+                    case "only":
+                        if dest_hostnames:
+                            hostnames = set(map(lambda x: x.strip(), data.split(",")))
+                            parsing_for = hostnames
+                        else:
+                            logging.error(f"{base}:L{lc} unexpected only directive - hosts not defined yet")
+                            return None
+                    case "end":
+                        if parsing_for:
+                            parsing_for = None
+                        else:
+                            logging.error(f"{base}:L{lc} unexpected end directive")
+                            return None
+                    case _:
+                        logging.warning(f"{base}:L{lc} unknown dmg directive {directive}")
+            elif not parsing_for or hostname in parsing_for:
+                output_buffer.append(line)
+    return "\n".join(output_buffer).encode("utf-8")
+            
+
+if __name__ == "__main__":
+
+    if sys.version_info.minor < 10:
+        print("python 3.10 or greater is required to use this software")
+        os._exit(1)
+
+    if not os.getenv("DMG_ROOT"):
+        print("DMG_ROOT not set, exiting")
+        os._exit(1)
+    DMG_DIR = os.path.expandvars(os.getenv("DMG_ROOT"))
+
+    agp = argparse.ArgumentParser(description="dotfile manager")
+    #flags
+    agp.add_argument("-l", dest="loglevel", help="Set the log level.", type=str, default="info", choices=["info", "warning", "error", "debug"])
+    agp.add_argument("--dry", dest="dryrun", help="Dry run: operate normally, but do not write anything to disk.", action=argparse.BooleanOptionalAction)
+    #actions
+    agp.add_argument("-a", dest="action", help="Action to take.", choices=["deploy", "import"], required=True)
+    agp.add_argument("-f", dest="file", help="Generic file argument. Used for import and deploy.")
+    args = agp.parse_args()
+    logging.basicConfig(level=args.loglevel.upper())
+
+    logging.debug(f"DMG_ROOT is set to {DMG_DIR}")
+    objects = os.listdir(DMG_DIR)
+    HOSTNAME = os.uname()[1]
+    match args.action:
+        case "deploy":
+            if not args.file: #all files
+                for root, dirs, files in os.walk(DMG_DIR):
+                    for fname in files:
+                        fpath = os.path.join(root, fname)
+                        dest = fpath[len(DMG_DIR):]
+                        fcontent = parse_file(fpath, HOSTNAME, dest)
+                        logging.debug(fpath+" -> "+dest)
+                        if not args.dryrun:
+                            logging.info(f"deploying {dest}")
+                            os.makedirs(os.path.dirname(dest), exist_ok=True)
+                            shutil.copy(fpath, dest)
+            else: #all files
+                pass
+        case "import":
+            if not args.file:
+                logging.error("file argument required for import")
+                os._exit(1)
+            else:
+                #TODO: copy file into the root
+                pass
