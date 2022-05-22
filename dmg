@@ -4,8 +4,9 @@ import sys
 import argparse
 import logging
 import shutil
-from subprocess import call
+import subprocess
 import tempfile
+import pydoc
 import hashlib
 
 # ERROR MESSSAGES
@@ -16,7 +17,7 @@ E_FILE_NON_EXIST = "failed: {file} does not exist"
 I_DEPLOYING = "deploying {file}"
 I_PARSE_OK = "{file}: parsing OK"
 
-VERSION = "0.1.5"
+VERSION = "0.1.6"
 
 #base would be DMG_ROOT
 #file would be something like ~/.zshrc
@@ -128,8 +129,8 @@ if __name__ == "__main__":
     agp.add_argument("-l", dest="loglevel", help="Set the log level.", type=str, default="info", choices=["info", "warning", "error", "debug", "verify"])
     agp.add_argument("--dry", dest="dryrun", help="Dry run: parse normally, but do not write anything to disk.", action=argparse.BooleanOptionalAction)
     #actions
-    agp.add_argument("-a", dest="action", help="Action to take.", choices=["deploy", "import", "parse", "edit", "delete", "verify"], required=True)
-    agp.add_argument("-f", dest="file", help="Generic file argument. Required for import, parse, edit, and delete.")
+    agp.add_argument("-a", dest="action", help="Action to take.", choices=["deploy", "import", "parse", "edit", "delete", "verify", "diff"], required=True)
+    agp.add_argument("-f", dest="file", help="Generic file argument. Required for import, parse, edit, delete, and diff.")
     agp.add_argument("-s", dest="dir", help="Source directory. May use DMG_ROOT env variable instead.", type=str, default=os.path.expandvars(os.getenv("DMG_ROOT")))
     args = agp.parse_args()
     logging.basicConfig(level=args.loglevel.upper())
@@ -223,7 +224,7 @@ if __name__ == "__main__":
             with tempfile.NamedTemporaryFile(suffix=".tmp") as tf:
                 tf.write(init_content.encode("utf-8"))
                 tf.flush()
-                call([EDITOR, tf.name])
+                subprocess.call([EDITOR, tf.name])
                 tf.seek(0)
                 data = dmg_parse(tf.name, HOSTNAME, display=args.file)
                 if data:
@@ -245,6 +246,30 @@ if __name__ == "__main__":
                             print(f"{dest} -> \033[1;32mOK\033[0m")
                         else:
                             print(f"{dest} -> \033[1;31m{res}\033[0m")
+        case "diff":
+            if not args.file:
+                logging.error(E_FILE_ARG_MISSING.format(file=args.file))
+                os._exit(1)
+            if not os.path.exists(args.file):
+                logging.error(E_FILE_NON_EXIST.format(file=args.file))
+                os._exit(1)
+            absp = os.path.abspath(args.file)
+            fp = DMG_DIR + "/" + absp
+            if not os.path.exists(fp):
+                logging.error(E_NOT_MANAGED.format(file=absp))
+                os._exit(1)
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".tmp") as tf:
+                    data = dmg_parse(fp, HOSTNAME, absp)
+                    tf.write(data)
+                    tf.flush()
+                    diff_content = subprocess.check_output(["diff","--color=always",tf.name,absp])
+                    logging.info("no differences")
+            except subprocess.CalledProcessError as e:
+                if (e.returncode == 1):
+                    pydoc.pager(e.output.decode("utf-8"))
+                else:
+                    logging.error(f"failed to diff: diff returned exit code {e.returncode}")
         case "delete":
             if not args.file:
                 logging.error(E_FILE_ARG_MISSING.format(operation=args.action))
