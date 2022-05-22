@@ -9,6 +9,7 @@ def parse_file(path: str, hostname: str, base: str) -> bytes:
     dest_hostnames = None
     output_buffer = []
     parsing_for = None
+    mode = None
     lc = 0
     with open(path, "r") as fp:
         while True:
@@ -36,22 +37,39 @@ def parse_file(path: str, hostname: str, base: str) -> bytes:
                             logging.error(f"{base}:L{lc} unexpected hosts directive - hosts already declared")
                             return None
                     case "only":
-                        if dest_hostnames:
+                        if parsing_for:
+                            logging.error(f"{base}:L{lc} unexpected only directive - already in block")
+                            return None
+                        elif dest_hostnames:
                             hostnames = set(map(lambda x: x.strip(), data.split(",")))
                             parsing_for = hostnames
+                            mode = "only"
                         else:
                             logging.error(f"{base}:L{lc} unexpected only directive - hosts not defined yet")
+                            return None
+                    case "not":
+                        if parsing_for:
+                            logging.error(f"{base}:L{lc} unexpected not directive - already in block")
+                            return None
+                        elif dest_hostnames:
+                            hostnames = set(map(lambda x: x.strip(), data.split(",")))
+                            parsing_for = hostnames
+                            mode = "not"
+                        else:
+                            logging.error(f"{base}:L{lc} unexpected not directive - hosts not defined yet")
                             return None
                     case "end":
                         if parsing_for:
                             parsing_for = None
+                            mode = None
                         else:
                             logging.error(f"{base}:L{lc} unexpected end directive")
                             return None
                     case _:
-                        logging.warning(f"{base}:L{lc} unknown dmg directive {directive}")
-            elif parsing_for == None or hostname in parsing_for:
+                        logging.warning(f"{base}:L{lc} unknown dmg directive {directive}")    
+            elif mode == None or (mode == "not" and hostname not in parsing_for) or (mode == "only" and hostname in parsing_for):
                 output_buffer.append(line)
+            
 
     return "".join(output_buffer).encode("utf-8")
             
@@ -62,11 +80,6 @@ if __name__ == "__main__":
         print("python 3.10 or greater is required to use this software")
         os._exit(1)
 
-    if not os.getenv("DMG_ROOT"):
-        print("DMG_ROOT not set, exiting")
-        os._exit(1)
-    DMG_DIR = os.path.expandvars(os.getenv("DMG_ROOT"))
-
     agp = argparse.ArgumentParser(description="dotfile manager")
     #flags
     agp.add_argument("-l", dest="loglevel", help="Set the log level.", type=str, default="info", choices=["info", "warning", "error", "debug"])
@@ -74,8 +87,14 @@ if __name__ == "__main__":
     #actions
     agp.add_argument("-a", dest="action", help="Action to take.", choices=["deploy", "import"], required=True)
     agp.add_argument("-f", dest="file", help="Generic file argument. Used for import and deploy.")
+    agp.add_argument("-s", dest="dir", help="Source directory. May use DMG_ROOT env variable instead.", type=str, default=os.path.expandvars(os.getenv("DMG_ROOT")))
     args = agp.parse_args()
     logging.basicConfig(level=args.loglevel.upper())
+
+    DMG_DIR = args.dir
+    if not DMG_DIR:
+        logging.error("DMG_ROOT not set and -s option not passed, exiting")
+        os._exit(1)
 
     logging.debug(f"DMG_ROOT is set to {DMG_DIR}")
     objects = os.listdir(DMG_DIR)
@@ -89,18 +108,30 @@ if __name__ == "__main__":
                         dest = fpath[len(DMG_DIR):]
                         fcontent = parse_file(fpath, HOSTNAME, dest)
                         logging.debug(fpath+" -> "+dest)
-                        if not args.dryrun:
+                        if not fcontent:
+                            #parser failed
+                            logging.error(f"{fpath}: parsing failed")
+                        elif not args.dryrun:
                             logging.info(f"deploying {dest}")
                             os.makedirs(os.path.dirname(dest), exist_ok=True)
                             f = open(dest, 'wb')
                             f.write(fcontent)
                             f.close()
-            else: #all files
+                        else:
+                            logging.info(f"{fpath}: parsing ok")
+            else: #one files
                 pass
         case "import":
             if not args.file:
                 logging.error("file argument required for import")
                 os._exit(1)
             else:
-                #TODO: copy file into the root
-                pass
+                if not args.dryrun:
+                    if os.path.exists(args.file):
+                        dest = DMG_DIR + "/" + os.path.abspath(args.file)
+                        os.makedirs(os.path.dirname(dest), exist_ok=True)
+                        shutil.copy(args.file, dest)
+                        logging.info(f"imported {args.file} -> {dest}")
+                    else:
+                        logging.error(f"import failed: file {args.file} does not exist")
+                        os._exit(1)
