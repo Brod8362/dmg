@@ -10,8 +10,7 @@ VERSION = "0.1.0"
 def dmg_parse(path: str, hostname: str, base: str) -> bytes:
     dest_hostnames = None
     output_buffer = []
-    parsing_for = None
-    mode = None
+    parse_stack: list[tuple[set[str], str]] = []
     lc = 0
     with open(path, "r") as fp:
         while True:
@@ -39,37 +38,32 @@ def dmg_parse(path: str, hostname: str, base: str) -> bytes:
                             logging.error(f"{base}:L{lc} unexpected hosts directive - hosts already declared")
                             return None
                     case "only":
-                        if parsing_for:
-                            logging.error(f"{base}:L{lc} unexpected only directive - already in block")
-                            return None
-                        elif dest_hostnames:
+                        if dest_hostnames:
                             hostnames = set(map(lambda x: x.strip(), data.split(",")))
-                            parsing_for = hostnames
-                            mode = "only"
+                            parse_stack.append( (hostnames, "only"))
                         else:
                             logging.error(f"{base}:L{lc} unexpected only directive - hosts not defined yet")
                             return None
                     case "not":
-                        if parsing_for:
-                            logging.error(f"{base}:L{lc} unexpected not directive - already in block")
-                            return None
-                        elif dest_hostnames:
+                        if dest_hostnames:
                             hostnames = set(map(lambda x: x.strip(), data.split(",")))
-                            parsing_for = hostnames
-                            mode = "not"
+                            parse_stack.append( (hostnames, "not") )
                         else:
                             logging.error(f"{base}:L{lc} unexpected not directive - hosts not defined yet")
                             return None
                     case "end":
-                        if parsing_for:
-                            parsing_for = None
-                            mode = None
+                        if parse_stack:
+                           parse_stack.pop()
                         else:
                             logging.error(f"{base}:L{lc} unexpected end directive")
                             return None
                     case _:
-                        logging.warning(f"{base}:L{lc} unknown dmg directive {directive}")    
-            elif mode == None or (mode == "not" and hostname not in parsing_for) or (mode == "only" and hostname in parsing_for):
+                        logging.warning(f"{base}:L{lc} unknown directive {directive}")    
+            elif parse_stack: #stack non-empty
+                parsing_for, mode = parse_stack[-1]
+                if mode == None or (mode == "not" and hostname not in parsing_for) or (mode == "only" and hostname in parsing_for):
+                    output_buffer.append(line)
+            else: #stack empty
                 output_buffer.append(line)
             
 
