@@ -17,7 +17,7 @@ E_FILE_NON_EXIST = "failed: {file} does not exist"
 I_DEPLOYING = "deploying {file}"
 I_PARSE_OK = "{file}: parsing OK"
 
-VERSION = "0.1.6"
+VERSION = "0.1.7"
 
 #base would be DMG_ROOT
 #file would be something like ~/.zshrc
@@ -226,12 +226,16 @@ if __name__ == "__main__":
                 tf.flush()
                 subprocess.call([EDITOR, tf.name])
                 tf.seek(0)
+                new_content = tf.read()
+                if new_content.decode("utf-8") == init_content:
+                    logging.info("no change made")
+                    os._exit(1)
                 data = dmg_parse(tf.name, HOSTNAME, display=args.file)
                 if data:
                     if not args.dryrun:
                         deploy(data, os.path.abspath(args.file)) #deploy to new location
                         fd = open(fp, 'wb') 
-                        fd.write(tf.read())
+                        fd.write(new_content)
                         fd.close() #overwrite original
                     logging.info(f"{args.file} parsed OK and deployed")
                 else:
