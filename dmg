@@ -4,10 +4,18 @@ import sys
 import argparse
 import logging
 import shutil
+from subprocess import call
+import tempfile
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
-def dmg_parse(path: str, hostname: str, base: str) -> bytes:
+def deploy(data: bytes, output_path: str) -> None:
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    f = open(output_path, 'wb')
+    f.write(data)
+    f.close()
+
+def dmg_parse(path: str, hostname: str, display: str = None) -> bytes:
     dest_hostnames = None
     output_buffer = []
     parse_stack: list[tuple[set[str], str]] = []
@@ -30,35 +38,36 @@ def dmg_parse(path: str, hostname: str, base: str) -> bytes:
                     case "hosts":
                         if not dest_hostnames:
                             dest_hostnames = set(map(lambda x: x.strip(), data.split(",")))
-                            logging.debug(f"{base} is for {dest_hostnames}")
+                            logging.debug(f"{display} is for {dest_hostnames}")
                             if not hostname in dest_hostnames:
-                                logging.info(f"{base} not for me, skipping")
+                                logging.info(f"{display} not for me, skipping")
                                 return None
                         else: #hostnames already found
-                            logging.error(f"{base}:L{lc} unexpected hosts directive - hosts already declared")
+                            logging.error(f"{display}:L{lc} unexpected hosts directive - hosts already declared")
                             return None
                     case "only":
                         if dest_hostnames:
                             hostnames = set(map(lambda x: x.strip(), data.split(",")))
                             parse_stack.append( (hostnames, "only"))
                         else:
-                            logging.error(f"{base}:L{lc} unexpected only directive - hosts not defined yet")
+                            logging.error(f"{display}:L{lc} unexpected only directive - hosts not defined yet")
                             return None
                     case "not":
                         if dest_hostnames:
                             hostnames = set(map(lambda x: x.strip(), data.split(",")))
                             parse_stack.append( (hostnames, "not") )
                         else:
-                            logging.error(f"{base}:L{lc} unexpected not directive - hosts not defined yet")
+                            logging.error(f"{display}:L{lc} unexpected not directive - hosts not defined yet")
                             return None
                     case "end":
                         if parse_stack:
                            parse_stack.pop()
                         else:
-                            logging.error(f"{base}:L{lc} unexpected end directive")
+                            logging.error(f"{display}:L{lc} unexpected end directive")
                             return None
                     case _:
-                        logging.warning(f"{base}:L{lc} unknown directive {directive}")    
+                        logging.warning(f"{display}:L{lc} unknown directive {directive}")    
+                        return None
             elif parse_stack: #stack non-empty
                 parsing_for, mode = parse_stack[-1]
                 if mode == None or (mode == "not" and hostname not in parsing_for) or (mode == "only" and hostname in parsing_for):
@@ -66,7 +75,9 @@ def dmg_parse(path: str, hostname: str, base: str) -> bytes:
             else: #stack empty
                 output_buffer.append(line)
             
-
+    if parse_stack:
+        logging.error(f"{display}:L{lc} unexpected eof (not enough end directives)")
+        return None
     return "".join(output_buffer).encode("utf-8")
             
 
@@ -81,7 +92,7 @@ if __name__ == "__main__":
     agp.add_argument("-l", dest="loglevel", help="Set the log level.", type=str, default="info", choices=["info", "warning", "error", "debug"])
     agp.add_argument("--dry", dest="dryrun", help="Dry run: parse normally, but do not write anything to disk.", action=argparse.BooleanOptionalAction)
     #actions
-    agp.add_argument("-a", dest="action", help="Action to take.", choices=["deploy", "import", "parse"], required=True)
+    agp.add_argument("-a", dest="action", help="Action to take.", choices=["deploy", "import", "parse", "edit"], required=True)
     agp.add_argument("-f", dest="file", help="Generic file argument. Required for import and parse.")
     agp.add_argument("-s", dest="dir", help="Source directory. May use DMG_ROOT env variable instead.", type=str, default=os.path.expandvars(os.getenv("DMG_ROOT")))
     args = agp.parse_args()
@@ -102,17 +113,14 @@ if __name__ == "__main__":
                     for fname in files:
                         fpath = os.path.join(root, fname)
                         dest = fpath[len(DMG_DIR):]
-                        fcontent = dmg_parse(fpath, HOSTNAME, dest)
+                        fcontent = dmg_parse(fpath, HOSTNAME, display=dest)
                         logging.debug(fpath+" -> "+dest)
                         if not fcontent:
                             #parser failed
                             logging.error(f"{fpath}: parsing failed")
                         elif not args.dryrun:
                             logging.info(f"deploying {dest}")
-                            os.makedirs(os.path.dirname(dest), exist_ok=True)
-                            f = open(dest, 'wb')
-                            f.write(fcontent)
-                            f.close()
+                            deploy(fcontent, dest)
                         else:
                             logging.info(f"{fpath}: parsing ok")
             else: #one files
@@ -145,3 +153,33 @@ if __name__ == "__main__":
                     logging.error(f"{args.file}: parsing failed")
                     os._exit(1)
                 sys.stdout.buffer.write(output)
+        case "edit":
+            # args.file - a potentially relative path passed in by the user
+            # fp - the path where args.file would be stored, if it was managed by dmg
+            EDITOR = os.environ.get("EDITOR", "vim")
+            if not args.file:
+                logging.error("file argument required for edit")
+                os._exit(1)
+            fp = DMG_DIR + "/" + os.path.abspath(args.file)
+            if not os.path.exists(fp):
+                logging.error(f"file {os.path.abspath(args.file)} is not managed by dmg")
+                os._exit(1)
+            orig_fd = open(fp, 'r')
+            init_content = orig_fd.read()
+            orig_fd.close()
+            with tempfile.NamedTemporaryFile(suffix=".tmp") as tf:
+                tf.write(init_content.encode("utf-8"))
+                tf.flush()
+                call([EDITOR, tf.name])
+                tf.seek(0)
+                data = dmg_parse(tf.name, HOSTNAME, display=args.file)
+                if data:
+                    deploy(data, os.path.abspath(args.file)) #deploy to new location
+                    fd = open(fp, 'wb') 
+                    fd.write(tf.read())
+                    fd.close() #overwrite original
+                    logging.info(f"{args.file} parsed OK and deployed")
+                else:
+                    logging.error(f"failed to parse {args.file}")
+        case _:
+            logging.error(f"unknown action: {args.action}")
