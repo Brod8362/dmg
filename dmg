@@ -17,7 +17,7 @@ E_FILE_NON_EXIST = "failed: {file} does not exist"
 I_DEPLOYING = "deploying {file}"
 I_PARSE_OK = "{file}: parsing OK"
 
-VERSION = "0.1.7"
+VERSION = "0.1.8"
 
 #base would be DMG_ROOT
 #file would be something like ~/.zshrc
@@ -132,6 +132,7 @@ if __name__ == "__main__":
     agp.add_argument("-a", dest="action", help="Action to take.", choices=["deploy", "import", "parse", "edit", "delete", "verify", "diff"], required=True)
     agp.add_argument("-f", dest="file", help="Generic file argument. Required for import, parse, edit, delete, and diff.")
     agp.add_argument("-s", dest="dir", help="Source directory. May use DMG_ROOT env variable instead.", type=str, default=os.path.expandvars(os.getenv("DMG_ROOT")))
+    agp.add_argument("-n", dest="hostname", help="Override system hostname", type=str, default=os.uname()[1])
     args = agp.parse_args()
     logging.basicConfig(level=args.loglevel.upper())
 
@@ -142,7 +143,6 @@ if __name__ == "__main__":
 
     logging.debug(f"DMG_ROOT is set to {DMG_DIR}")
     objects = os.listdir(DMG_DIR)
-    HOSTNAME = os.uname()[1]
     match args.action:
         case "deploy":
             if not args.file: #all files
@@ -150,7 +150,7 @@ if __name__ == "__main__":
                     for fname in files:
                         fpath = os.path.join(root, fname)
                         dest = fpath[len(DMG_DIR):]
-                        fcontent = dmg_parse(fpath, HOSTNAME, display=dest)
+                        fcontent = dmg_parse(fpath, args.hostname, display=dest)
                         logging.debug(fpath+" -> "+dest)
                         if not fcontent:
                             #parser failed
@@ -165,7 +165,7 @@ if __name__ == "__main__":
                 if not os.path.exists(fp):
                     logging.error(E_NOT_MANAGED.format(file=args.file))
                 dest = fp[len(DMG_DIR):]
-                fcontent = dmg_parse(fp, HOSTNAME, display=dest)
+                fcontent = dmg_parse(fp, args.hostname, display=dest)
                 if not fcontent:
                     logging.error(E_PARSE_FAIL.format(file=fp))
                 elif not args.dryrun:
@@ -202,7 +202,7 @@ if __name__ == "__main__":
                 if not os.path.exists(args.file):
                     logging.error(f"{args.file} does not exist")
                     os._exit(1)
-                output = dmg_parse(args.file, HOSTNAME, args.file)
+                output = dmg_parse(args.file, args.hostname, args.file)
                 if not output:
                     logging.error(f"{args.file}: parsing failed")
                     os._exit(1)
@@ -230,7 +230,7 @@ if __name__ == "__main__":
                 if new_content.decode("utf-8") == init_content:
                     logging.info("no change made")
                     os._exit(1)
-                data = dmg_parse(tf.name, HOSTNAME, display=args.file)
+                data = dmg_parse(tf.name, args.hostname, display=args.file)
                 if data:
                     if not args.dryrun:
                         deploy(data, os.path.abspath(args.file)) #deploy to new location
@@ -245,14 +245,14 @@ if __name__ == "__main__":
                     for fname in files:
                         fpath = os.path.join(root, fname)
                         dest = fpath[len(DMG_DIR):]
-                        res = verify(DMG_DIR, dest, HOSTNAME)
+                        res = verify(DMG_DIR, dest, args.hostname)
                         if not res:
                             print(f"{dest} -> \033[1;32mOK\033[0m")
                         else:
                             print(f"{dest} -> \033[1;31m{res}\033[0m")
         case "diff":
             if not args.file:
-                logging.error(E_FILE_ARG_MISSING.format(file=args.file))
+                logging.error(E_FILE_ARG_MISSING.format(operation=args.action))
                 os._exit(1)
             if not os.path.exists(args.file):
                 logging.error(E_FILE_NON_EXIST.format(file=args.file))
@@ -264,7 +264,7 @@ if __name__ == "__main__":
                 os._exit(1)
             try:
                 with tempfile.NamedTemporaryFile(suffix=".tmp") as tf:
-                    data = dmg_parse(fp, HOSTNAME, absp)
+                    data = dmg_parse(fp, args.hostname, absp)
                     tf.write(data)
                     tf.flush()
                     diff_content = subprocess.check_output(["diff","--color=always",tf.name,absp])

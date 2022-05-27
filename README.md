@@ -85,6 +85,7 @@ All dmg directives begin with `##$`, and are expected to be the *only* content o
 name: hosts
 description: the hosts that this file should be deployed to
 argument(s): the hosts that this file should be deployed to
+note: This directive is NOT required if you do not intend to use any other directives in the file. However, if you want to use `only` or `not`, it IS required.
 
 > `only: arg1, arg2...`
 
